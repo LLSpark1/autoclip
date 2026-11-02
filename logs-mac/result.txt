@@ -1,0 +1,5 @@
+success
+total 430688
+drwxr-xr-x   3 runner  staff         96 Nov  2 05:00 .
+drwxr-xr-x  22 runner  staff        704 Nov  2 05:00 ..
+-rw-r--r--@  1 runner  staff  220511285 Nov  2 05:00 AutoClip-Studio-Mac.dmg

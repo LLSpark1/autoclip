@@ -1,0 +1,5 @@
+success
+total 158320
+drwxr-xr-x 1 runneradmin 197121         0 Nov  2 05:03 .
+drwxr-xr-x 1 runneradmin 197121         0 Nov  2 05:03 ..
+-rwxr-xr-x 1 runneradmin 197121 162112384 Nov  2 05:03 AutoClip-Studio-Setup.exe

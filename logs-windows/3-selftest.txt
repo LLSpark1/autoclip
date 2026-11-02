@@ -1,0 +1,21 @@
+ffmpeg: D:\a\autoclip\autoclip\dist\AutoClip Studio\_internal\imageio_ffmpeg\binaries\ffmpeg-win-x86_64-v7.1.exe
+app window support: OK
+Closing server running on port: 7860
+app page OK
+Loading speech model (the first time downloads it)...
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Xet Storage is enabled for this repo, but the 'hf_xet' package is not installed. Falling back to regular HTTP download. For better performance, install the package with: `pip install huggingface_hub[hf_xet]` or `pip install hf_xet`
+Transcribing... 0:03.86 of 0:24.71
+Transcribing... 0:06.98 of 0:24.71
+Transcribing... 0:09.64 of 0:24.71
+Transcribing... 0:12.38 of 0:24.71
+Transcribing... 0:17.10 of 0:24.71
+Transcribing... 0:19.54 of 0:24.71
+Transcribing... 0:21.28 of 0:24.71
+Transcribing... 0:23.74 of 0:24.71
+Finding the best moments...
+Making clip 1 of 1: Honestly, nobody tells you the biggest mistake
+Done! 1 clips saved in C:\Users\runneradmin\autoclip-selftest
+clip OK: C:\Users\runneradmin\autoclip-selftest\01-honestly-nobody-tells-you-the-biggest-mi.mp4 - Honestly, nobody tells you the biggest mistake
+SELFTEST PASSED
+exit code: 0
