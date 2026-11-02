@@ -6,6 +6,7 @@ Steps: transcribe the video -> pick the best moments -> crop to vertical
 import hashlib
 import json
 import os
+import random
 import re
 import shutil
 import statistics
@@ -21,11 +22,12 @@ CONFIG_PATH = DATA_DIR / "config.json"
 # ---------------------------------------------------------------- helpers
 
 def ffmpeg():
-    """System ffmpeg if installed, else the copy that comes with imageio-ffmpeg."""
-    if shutil.which("ffmpeg"):
-        return shutil.which("ffmpeg")
-    import imageio_ffmpeg
-    return imageio_ffmpeg.get_ffmpeg_exe()
+    """The ffmpeg that comes with imageio-ffmpeg (known to support captions), else the system one."""
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except (ImportError, RuntimeError):
+        return shutil.which("ffmpeg") or "ffmpeg"
 
 
 def video_info(path):
@@ -206,6 +208,14 @@ def find_face_x(video, start, end):
 
 
 def crop_filter(framing, src_w, src_h, face_x):
+    if framing == "split":  # speaker on top, background video (input 1) below
+        half = OUT_H // 2
+        crop_w = min(src_w, int(src_h * OUT_W / half)) // 2 * 2
+        center = face_x if face_x is not None else src_w / 2
+        x = int(min(max(center - crop_w / 2, 0), src_w - crop_w))
+        return (f"[0:v]crop={crop_w}:{src_h}:{x}:0,scale={OUT_W}:{half},setsar=1[top];"
+                f"[1:v]scale={OUT_W}:{half}:force_original_aspect_ratio=increase,"
+                f"crop={OUT_W}:{half},setsar=1[bottom];[top][bottom]vstack")
     if framing == "fit":  # whole frame on top of a blurred copy
         return ("[0:v]split[a][b];"
                 f"[a]scale={OUT_W}:{OUT_H}:force_original_aspect_ratio=increase,crop={OUT_W}:{OUT_H},boxblur=20:2[bg];"
@@ -227,7 +237,7 @@ def clean(s):
     return s.replace("\\", "").replace("{", "(").replace("}", ")").upper()
 
 
-def write_captions(segs, start, end, title, path):
+def write_captions(segs, start, end, title, path, caption_margin=560):
     """Subtitle file: headline on top, 3 words at a time with the spoken word highlighted."""
     lines = [
         "[Script Info]", "ScriptType: v4.00+", f"PlayResX: {OUT_W}", f"PlayResY: {OUT_H}", "",
@@ -235,7 +245,7 @@ def write_captions(segs, start, end, title, path):
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, "
         "Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
         "Alignment, MarginL, MarginR, MarginV, Encoding",
-        "Style: Cap,DejaVu Sans,86,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,7,3,2,60,60,560,1",
+        f"Style: Cap,DejaVu Sans,86,&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,7,3,2,60,60,{caption_margin},1",
         "Style: Title,DejaVu Sans,64,&H00000000,&H00000000,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,0,0,3,18,0,8,80,80,180,1",
         "", "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -255,17 +265,27 @@ def write_captions(segs, start, end, title, path):
 
 # ---------------------------------------------------------------- 5. render
 
-def render(video, clip, segs, out_dir, number, framing, src_w, src_h):
+def render(video, clip, segs, out_dir, number, framing, src_w, src_h, background=None):
     name = f"{number:02d}-{slugify(clip['title'])}"
     subs = out_dir / f"{name}.ass"
-    write_captions(segs, clip["start"], clip["end"], clip["title"], subs)
-    face_x = find_face_x(video, clip["start"], clip["end"]) if framing == "face" else None
-    # Relative paths in the filter avoid escaping problems with drive letters and spaces.
-    fonts = os.path.relpath(FONTS_DIR, out_dir).replace("\\", "/")
-    filters = crop_filter(framing, src_w, src_h, face_x) + f",ass={subs.name}:fontsdir={fonts}[v]"
+    split = framing == "split" and background
+    if framing == "split" and not background:
+        framing = "face"
+    # In split screen the captions sit on the line between the two videos.
+    write_captions(segs, clip["start"], clip["end"], clip["title"], subs, 900 if split else 560)
+    face_x = find_face_x(video, clip["start"], clip["end"]) if framing in ("face", "split") else None
+    # Fonts are copied next to the clips so the filter can use a short relative path
+    # (avoids escaping problems with drive letters and spaces).
+    filters = crop_filter(framing, src_w, src_h, face_x) + f",ass={subs.name}:fontsdir=.fonts[v]"
+    duration = clip["end"] - clip["start"]
+    inputs = ["-ss", f"{clip['start']:.2f}", "-t", f"{duration:.2f}", "-i", str(Path(video).resolve())]
+    if split:
+        bg_len = video_info(background)[2]
+        offset = random.uniform(0, max(0, bg_len - duration))  # different part of it each clip
+        inputs += ["-stream_loop", "-1", "-ss", f"{offset:.2f}", "-i", str(Path(background).resolve())]
     result = subprocess.run(
-        [ffmpeg(), "-y", "-loglevel", "error", "-ss", f"{clip['start']:.2f}", "-to", f"{clip['end']:.2f}",
-         "-i", str(Path(video).resolve()), "-filter_complex", filters, "-map", "[v]", "-map", "0:a?",
+        [ffmpeg(), "-y", "-loglevel", "error", *inputs, "-filter_complex", filters,
+         "-map", "[v]", "-map", "0:a?", "-t", f"{duration:.2f}",
          "-c:v", "libx264", "-crf", "20", "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
          "-movflags", "+faststart", f"{name}.mp4"],
         cwd=out_dir, capture_output=True, text=True, errors="replace")
@@ -279,10 +299,17 @@ def render(video, clip, segs, out_dir, number, framing, src_w, src_h):
 
 # ---------------------------------------------------------------- everything
 
-def make_clips(video, out_dir, n=5, min_len=30, max_len=60, crop="face", topic="", api_key="", log=print):
-    """Turn one video into clips. Returns a list of (mp4 path, clip info)."""
+def make_clips(video, out_dir, n=5, min_len=30, max_len=60, crop="face", topic="", api_key="",
+               background=None, log=print):
+    """Turn one video into clips. Returns a list of (mp4 path, clip info).
+
+    crop: "face" (follow the speaker), "fit" (full frame) or "split" (speaker on top,
+    the `background` video, e.g. satisfying or gameplay footage, underneath).
+    """
     out_dir = Path(out_dir).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / ".fonts").mkdir(parents=True, exist_ok=True)
+    for font in FONTS_DIR.glob("*.ttf"):
+        shutil.copy(font, out_dir / ".fonts")
     src_w, src_h, total = video_info(video)
 
     segs = transcribe(video, log)
@@ -303,6 +330,7 @@ def make_clips(video, out_dir, n=5, min_len=30, max_len=60, crop="face", topic="
     results = []
     for i, clip in enumerate(clips, 1):
         log(f"Making clip {i} of {len(clips)}: {clip['title']}")
-        results.append((render(video, clip, segs, out_dir, i, crop, src_w, src_h), clip))
+        results.append((render(video, clip, segs, out_dir, i, crop, src_w, src_h, background), clip))
+    shutil.rmtree(out_dir / ".fonts", ignore_errors=True)
     log(f"Done! {len(results)} clips saved in {out_dir}")
     return results

@@ -1,0 +1,139 @@
+name: Build installers
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+          - os: macos-latest
+            name: mac
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          mkdir -p logs
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller pywebview 2>&1 | tee logs/1-install.txt
+
+      - name: Build app
+        run: pyinstaller autoclip.spec --noconfirm 2>&1 | tee logs/2-build.txt
+
+      - name: Make a test video with real speech
+        run: |
+          TEXT="Honestly, nobody tells you the biggest mistake new clippers make. Why do most people quit after one week? Because they never post consistently! That is literally the whole secret. Post every single day, and the algorithm starts to love you. What happens if you skip a week? It forgets you. That is insane, right?"
+          if [ "${{ matrix.name }}" = "mac" ]; then
+            say -o speech.aiff "$TEXT"
+            AUDIO=speech.aiff
+          else
+            powershell -Command "Add-Type -AssemblyName System.Speech; \$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; \$s.SetOutputToWaveFile('speech.wav'); \$s.Speak('$TEXT'); \$s.Dispose()"
+            AUDIO=speech.wav
+          fi
+          FFMPEG=$(python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())")
+          "$FFMPEG" -loglevel error -y -f lavfi -i testsrc2=size=1920x1080:rate=30 -i "$AUDIO" \
+            -c:v libx264 -preset ultrafast -c:a aac -shortest speech-test.mp4
+          ls -la speech-test.mp4
+
+      - name: Self-test the built app (transcribe + clip)
+        run: |
+          if [ "${{ matrix.name }}" = "mac" ]; then
+            "dist/AutoClip Studio.app/Contents/MacOS/AutoClip Studio" --selftest "$PWD/speech-test.mp4" 2>&1 | tee logs/3-selftest.txt
+          else
+            # The Windows app has no console, so its output goes to a log file.
+            status=0
+            "dist/AutoClip Studio/AutoClip Studio.exe" --selftest "$(cygpath -w "$PWD/speech-test.mp4")" || status=$?
+            cat ~/.autoclip/app.log | tee logs/3-selftest.txt
+            exit $status
+          fi
+
+      - name: Package Windows installer
+        if: matrix.name == 'windows'
+        run: |
+          choco install innosetup -y --no-progress > /dev/null
+          VERSION=${GITHUB_REF_NAME#v}
+          [[ "$GITHUB_REF" == refs/tags/v* ]] || VERSION=1.0.0
+          iscc //DAppVersion=$VERSION installer/windows.iss 2>&1 | tee logs/4-package.txt
+          mkdir -p out && mv Output/AutoClip-Studio-Setup.exe out/
+
+      - name: Package Mac disk image
+        if: matrix.name == 'mac'
+        run: |
+          mkdir -p dmg out
+          cp -R "dist/AutoClip Studio.app" dmg/
+          ln -s /Applications dmg/Applications
+          hdiutil create -volname "AutoClip Studio" -srcfolder dmg -ov -format UDZO out/AutoClip-Studio-Mac.dmg 2>&1 | tee logs/4-package.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.name }}
+          path: out/*
+
+      - name: Record result
+        if: always()
+        run: |
+          mkdir -p logs
+          echo "${{ job.status }}" > logs/result.txt
+          ls -la out 2>/dev/null >> logs/result.txt || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-${{ matrix.name }}
+          path: logs/
+
+  # Publishes build logs to the ci-logs branch so they can be read without the GitHub website.
+  report:
+    needs: build
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: logs-*
+          path: logs
+      - name: Push logs to ci-logs branch
+        run: |
+          cd logs
+          {
+            echo "# Build of ${GITHUB_SHA::7} ($GITHUB_REF_NAME)"
+            for d in logs-*; do echo "- ${d#logs-}: $(head -1 $d/result.txt 2>/dev/null || echo missing)"; done
+          } > SUMMARY.md
+          git init -q -b ci-logs
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add -A && git commit -qm "Build logs for ${GITHUB_SHA::7}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}" ci-logs
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: out
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
