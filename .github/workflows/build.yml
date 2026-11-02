@@ -56,15 +56,18 @@ jobs:
 
       - name: Self-test the built app (transcribe + clip)
         run: |
+          # The installed app has no console, so its output goes to the AUTOCLIP_LOG file.
+          status=0
           if [ "${{ matrix.name }}" = "mac" ]; then
-            "dist/AutoClip Studio.app/Contents/MacOS/AutoClip Studio" --selftest "$PWD/speech-test.mp4" 2>&1 | tee logs/3-selftest.txt
+            AUTOCLIP_LOG="$PWD/logs/3-selftest.txt" \
+              "dist/AutoClip Studio.app/Contents/MacOS/AutoClip Studio" --selftest "$PWD/speech-test.mp4" || status=$?
           else
-            # The Windows app has no console, so its output goes to a log file.
-            status=0
-            "dist/AutoClip Studio/AutoClip Studio.exe" --selftest "$(cygpath -w "$PWD/speech-test.mp4")" || status=$?
-            cat ~/.autoclip/app.log | tee logs/3-selftest.txt
-            exit $status
+            AUTOCLIP_LOG="$(cygpath -w "$PWD/logs/3-selftest.txt")" \
+              "dist/AutoClip Studio/AutoClip Studio.exe" --selftest "$(cygpath -w "$PWD/speech-test.mp4")" || status=$?
           fi
+          echo "exit code: $status" >> logs/3-selftest.txt
+          cat logs/3-selftest.txt
+          exit $status
 
       - name: Package Windows installer
         if: matrix.name == 'windows'

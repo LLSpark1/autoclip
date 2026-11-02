@@ -70,6 +70,15 @@ def save_config(cfg):
 
 # ---------------------------------------------------------------- 1. transcribe
 
+def load_audio(video):
+    """16 kHz mono audio as float32, decoded with ffmpeg (the format Whisper expects)."""
+    import numpy as np
+    pcm = subprocess.run([ffmpeg(), "-nostdin", "-loglevel", "error", "-i", str(video),
+                          "-f", "s16le", "-ac", "1", "-ar", "16000", "-"],
+                         capture_output=True, check=True).stdout
+    return np.frombuffer(pcm, np.int16).astype(np.float32) / 32768.0
+
+
 def transcribe(video, log):
     """Word-level transcript, cached so the same video is only transcribed once."""
     st = Path(video).stat()
@@ -82,7 +91,7 @@ def transcribe(video, log):
     from faster_whisper import WhisperModel
     log("Loading speech model (the first time downloads it)...")
     model = WhisperModel("small", device="auto", compute_type="auto")
-    segments, info = model.transcribe(str(video), word_timestamps=True, vad_filter=True)
+    segments, info = model.transcribe(load_audio(video), word_timestamps=True, vad_filter=True)
     segs = []
     for s in segments:
         words = [{"w": w.word.strip(), "s": w.start, "e": w.end} for w in s.words or [] if w.word.strip()]

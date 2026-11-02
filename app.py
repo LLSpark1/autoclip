@@ -27,9 +27,13 @@ FRAMING = {
 }
 
 # Installed apps have no console; keep a log file for troubleshooting instead.
-if sys.stdout is None or sys.stderr is None:
-    autoclip.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    sys.stdout = sys.stderr = open(autoclip.DATA_DIR / "app.log", "w", buffering=1, encoding="utf-8")
+# AUTOCLIP_LOG picks the file (used by the automated build tests).
+if os.environ.get("AUTOCLIP_LOG") or sys.stdout is None or sys.stderr is None:
+    log_path = Path(os.environ.get("AUTOCLIP_LOG") or autoclip.DATA_DIR / "app.log")
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    sys.stdout = sys.stderr = open(log_path, "w", buffering=1, encoding="utf-8")
+    import faulthandler
+    faulthandler.enable(sys.stderr)  # also record hard crashes
 
 
 def saved_background():
